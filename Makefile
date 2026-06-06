@@ -6,9 +6,10 @@
 
 CC      = gcc
 CFLAGS  = -O0 -Wall -Wextra -g
-LDFLAGS = -pthread -lrt
+LDFLAGS = -pthread
 
-TARGETS = sequential multithreaded race_condition sync_mutex sync_semaphore benchmark
+TARGETS = sequential multithreaded race_condition sync_mutex sync_semaphore \
+					benchmark sync_condvar sync_rwlock sync_barrier
 
 .PHONY: all run_all clean
 
@@ -27,9 +28,18 @@ sync_mutex: sync_mutex.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 sync_semaphore: sync_semaphore.c
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< -lrt
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 benchmark: benchmark.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+sync_condvar: sync_condvar.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+sync_rwlock: sync_rwlock.c
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
+
+sync_barrier: sync_barrier.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 
 # -------------------------------------------------------
@@ -41,19 +51,28 @@ run_all: all
 	./sequential
 	@echo ""
 	@echo "========== 2. MULTITHREADED (4 threads) =========="
-	./multithreaded 4
+	./multithreaded
 	@echo ""
 	@echo "========== 3. RACE CONDITION =========="
 	./race_condition
 	@echo ""
-	@echo "========== 4. MUTEX (correct sync) =========="
+	@echo "========== 4. MUTEX =========="
 	./sync_mutex
 	@echo ""
-	@echo "========== 5. SEMAPHORE (producer-consumer) =========="
+	@echo "========== 5. SEMAPHORE =========="
 	./sync_semaphore
 	@echo ""
-	@echo "========== 6. BENCHMARK (1/2/4/8 threads) =========="
+	@echo "========== 6. BENCHMARK =========="
 	./benchmark
+	@echo ""
+	@echo "========== 7. CONDITION VARIABLE =========="
+	./sync_condvar
+	@echo ""
+	@echo "========== 8. READ-WRITE LOCK =========="
+	./sync_rwlock
+	@echo ""
+	@echo "========== 9. BARRIER =========="
+	./sync_barrier
 
 clean:
 	rm -f $(TARGETS)

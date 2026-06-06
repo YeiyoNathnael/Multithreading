@@ -1,121 +1,71 @@
 /*
  * sync_semaphore.c
  * CSC308 Spring 2026 — Member 3
- * Producer-Consumer pattern using POSIX semaphores.
- * One producer fills a bounded buffer; multiple consumers drain it.
+ * Same counter experiment using a POSIX binary semaphore instead of a mutex.
  *
- * Compile: gcc -O0 -pthread -o sync_semaphore sync_semaphore.c -lrt
+ * 4 threads x 100,000 increments = 400,000 (matches Member 2 spec).
+ * sem_wait() / sem_post() guard the critical section exactly like a mutex.
+ *
+ * Compile: gcc -O0 -pthread -o sync_semaphore sync_semaphore.c
  * Run:     ./sync_semaphore
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include <unistd.h>
+#include <time.h>
 
-#define BUFFER_SIZE    8
-#define NUM_CONSUMERS  3
-#define TOTAL_ITEMS   30
+#define NUM_THREADS           4
+#define INCREMENTS_PER_THREAD 100000
 
-/* ---- Bounded buffer ---- */
-static int buffer[BUFFER_SIZE];
-static int buf_in  = 0;   /* producer writes here  */
-static int buf_out = 0;   /* consumer reads here   */
+static long shared_counter = 0;
+static sem_t counter_sem;
 
-/* ---- Semaphores ---- */
-static sem_t empty_slots;   /* counts free slots  (init = BUFFER_SIZE) */
-static sem_t full_slots;    /* counts filled slots (init = 0)           */
-static sem_t buf_mutex;     /* binary semaphore protecting buffer index */
+double elapsed_sec(struct timespec *s, struct timespec *e) {
+    return (e->tv_sec - s->tv_sec) + (e->tv_nsec - s->tv_nsec) / 1e9;
+}
 
-/* ---- Shared state ---- */
-static int produced_count  = 0;
-static int consumed_count  = 0;
-static pthread_mutex_t print_lock = PTHREAD_MUTEX_INITIALIZER;
-
-/* ------------------------------------------------------------------ */
-void *producer(void *arg) {
+void *increment_sem(void *arg) {
     (void)arg;
-    for (int item = 1; item <= TOTAL_ITEMS; item++) {
-        sem_wait(&empty_slots);   /* block if buffer full   */
-        sem_wait(&buf_mutex);     /* enter critical section */
-
-        buffer[buf_in] = item;
-        buf_in = (buf_in + 1) % BUFFER_SIZE;
-        produced_count++;
-
-        pthread_mutex_lock(&print_lock);
-        printf("[Producer]   produced item %2d  (total produced: %d)\n",
-               item, produced_count);
-        pthread_mutex_unlock(&print_lock);
-
-        sem_post(&buf_mutex);     /* leave critical section */
-        sem_post(&full_slots);    /* signal: one more item  */
-        usleep(20000);            /* 20 ms — simulate work  */
+    for (int i = 0; i < INCREMENTS_PER_THREAD; i++) {
+        sem_wait(&counter_sem);    /* enter critical section */
+        shared_counter++;
+        sem_post(&counter_sem);    /* leave critical section */
     }
     return NULL;
 }
 
-void *consumer(void *arg) {
-    int id = *(int *)arg;
-    while (1) {
-        sem_wait(&full_slots);    /* block if buffer empty  */
-        sem_wait(&buf_mutex);
-
-        /* Check stop condition inside lock */
-        if (consumed_count >= TOTAL_ITEMS) {
-            sem_post(&buf_mutex);
-            sem_post(&full_slots);  /* unblock other waiting consumers */
-            break;
-        }
-
-        int item = buffer[buf_out];
-        buf_out = (buf_out + 1) % BUFFER_SIZE;
-        consumed_count++;
-
-        pthread_mutex_lock(&print_lock);
-        printf("[Consumer %d] consumed item %2d  (total consumed: %d)\n",
-               id, item, consumed_count);
-        pthread_mutex_unlock(&print_lock);
-
-        sem_post(&buf_mutex);
-        sem_post(&empty_slots);   /* one slot freed         */
-        usleep(50000);            /* 50 ms — simulate work  */
-    }
-    return NULL;
-}
-
-/* ------------------------------------------------------------------ */
 int main(void) {
-    printf("=== Producer-Consumer with Semaphores ===\n");
-    printf("Buffer size  : %d\n", BUFFER_SIZE);
-    printf("Consumers    : %d\n", NUM_CONSUMERS);
-    printf("Total items  : %d\n", TOTAL_ITEMS);
-    printf("-----------------------------------------\n");
+    pthread_t threads[NUM_THREADS];
+    long expected = (long)NUM_THREADS * INCREMENTS_PER_THREAD;
 
-    sem_init(&empty_slots, 0, BUFFER_SIZE);
-    sem_init(&full_slots,  0, 0);
-    sem_init(&buf_mutex,   0, 1);
+    printf("=== Multithreaded WITH Semaphore Synchronisation ===\n\n");
+    printf("Threads              : %d\n", NUM_THREADS);
+    printf("Increments per thread: %d\n", INCREMENTS_PER_THREAD);
+    printf("Expected counter     : %ld\n", expected);
+    printf("----------------------------------------------------\n");
 
-    pthread_t prod_thread;
-    pthread_t cons_threads[NUM_CONSUMERS];
-    int cons_ids[NUM_CONSUMERS];
+    sem_init(&counter_sem, 0, 1);  /* binary semaphore — max 1 thread inside */
 
-    pthread_create(&prod_thread, NULL, producer, NULL);
-    for (int c = 0; c < NUM_CONSUMERS; c++) {
-        cons_ids[c] = c + 1;
-        pthread_create(&cons_threads[c], NULL, consumer, &cons_ids[c]);
-    }
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    pthread_join(prod_thread, NULL);
-    for (int c = 0; c < NUM_CONSUMERS; c++)
-        pthread_join(cons_threads[c], NULL);
+    for (int t = 0; t < NUM_THREADS; t++)
+        pthread_create(&threads[t], NULL, increment_sem, NULL);
 
-    sem_destroy(&empty_slots);
-    sem_destroy(&full_slots);
-    sem_destroy(&buf_mutex);
+    for (int t = 0; t < NUM_THREADS; t++)
+        pthread_join(threads[t], NULL);
 
-    printf("-----------------------------------------\n");
-    printf("Done. Produced: %d | Consumed: %d\n", produced_count, consumed_count);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    sem_destroy(&counter_sem);
+
+    printf("Actual counter       : %ld\n", shared_counter);
+    printf("Execution time       : %.4f seconds\n", elapsed_sec(&t0, &t1));
+
+    if (shared_counter == expected)
+        printf("\nResult: CORRECT — semaphore prevented all race conditions.\n");
+    else
+        printf("\nResult: ERROR — unexpected mismatch.\n");
+
     return 0;
 }
